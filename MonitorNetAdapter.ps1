@@ -1,4 +1,4 @@
-﻿# Sleep time between each connection test (seconds)
+# Sleep time between each connection test (seconds)
 $SleepTime = 1
 # Number of echo requests to send per test
 $PingCount = 2
@@ -102,7 +102,7 @@ While ("YES","Y","NO","N" -notcontains $ConfirmStart) {
 }
 If ("NO","N" -contains $ConfirmStart) {$ConfirmRetry = "N"}
 While ("NO","N" -notcontains $ConfirmRetry) {
-    $ActiveAdapters = Get-NetAdapter | Where {$_.Status -eq "Up"}
+    $ActiveAdapters = Get-WmiObject -Class Win32_NetworkAdapter | Where {$_.NetEnabled -eq $True}
     If ($ActiveAdapters) {
         # More than 1 active connection
         If ($ActiveAdapters.Count -gt 1) {
@@ -114,7 +114,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             Write-Host
             Foreach ($Number in $IndexRange) {
                 $Index = $Number - 1
-                Write-Host "$Number)" $ActiveAdapters[$Index].InterfaceDescription
+                Write-Host "$Number)" $ActiveAdapters[$Index].Name
             }
             Write-Host
             $UserChoice = ""
@@ -122,13 +122,13 @@ While ("NO","N" -notcontains $ConfirmRetry) {
                 $UserChoice = Read-Host "Please enter the number for your choice"
             }
             $Index = $UserChoice - 1
-            $MacAddress = $ActiveAdapters[$Index].MacAddress -replace "-",":"
-            $InterfaceName = $ActiveAdapters[$Index].InterfaceDescription
+            $MacAddress = $ActiveAdapters[$Index].MACAddress
+            $InterfaceName = $ActiveAdapters[$Index].Name
         }
         # Only 1 active connection
         Else {
-            $MacAddress = $ActiveAdapters.MacAddress -replace "-",":"
-            $InterfaceName = $ActiveAdapters.InterfaceDescription
+            $MacAddress = $ActiveAdapters.MACAddress
+            $InterfaceName = $ActiveAdapters.Name
         }
         $AdapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where {$_.MACAddress -eq $MacAddress}
         If ($AdapterConfig.IPAddress.Count -gt 1) {$SourceIP = $AdapterConfig.IPAddress[0]}
@@ -180,7 +180,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             Write-Host "Success rate: $SuccessRate"
             Write-Host
             Write-Host "Please press F5 to stop monitoring"
-            If ($TestResult.Result -eq $False) {$FailureScriptBlock.Invoke()}
+            If ($TestResult.Result -eq $False) {Invoke-Command -ScriptBlock $FailureScriptBlock}
             Start-Sleep -Seconds $SleepTime
         } While (!($Host.UI.RawUI.KeyAvailable -and ($Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown,IncludeKeyUp").VirtualKeyCode -eq 116)))
         $MonitorEnd = Get-Date
