@@ -10,40 +10,40 @@ $DestinationHost = "internetbeacon.msedge.net"
 $FailureScriptBlock = {
     Write-Host
     Write-Host "Connection is down!" -ForegroundColor Red
-    Write-Host "Waiting for user to close browser..."
-    Start-Process "https://duckduckgo.com" -Wait
+    Start-Process notepad.exe -Wait # Do something
 }
 
 # Function - Ping using specific interface
 Function Ping-BySourceIP {
-    [CmdletBinding(DefaultParameterSetName="StraightPing")]
+    [CmdletBinding(DefaultParameterSetName="RegularPing")]
     Param(
-        [Parameter(ParameterSetName="StraightPing",Mandatory=$True)]
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$True)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$True)]
-        [Parameter(ParameterSetName="LatencyPing",Mandatory=$True)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$True)]
         [String]$Source,
-        [Parameter(ParameterSetName="StraightPing",Mandatory=$True)]
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$True)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$True)]
-        [Parameter(ParameterSetName="LatencyPing",Mandatory=$True)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$True)]
         [String]$Destination,
-        [Parameter(ParameterSetName="StraightPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
-        [Parameter(ParameterSetName="LatencyPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
         [Int]$Count = 2,
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
         [Switch]$Quiet = $False,
-        [Parameter(ParameterSetName="LatencyPing",Mandatory=$False)]
-        [Switch]$Latency = $False
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Switch]$Detailed = $False
     )
     $MainCommand = "ping -n $Count -S $Source $Destination"
-    If ($Quiet -or $Latency) {
+    If ($Quiet -or $Detailed) {
         $BoolScript = {
+            $ReturnedCount = 0
             If ($PingResults.Count -gt 1) {
                 $ResultTable = @()
                 $FailureStrings = @(
-                    "General failure"
                     "Request timed out"
                     "Destination host unreachable"
+                    "General failure"
                     "could not find host"
                     "not a valid address"
                 )
@@ -60,33 +60,36 @@ Function Ping-BySourceIP {
                             }
                         }
                     }
+                    If ($PacketTest) {$ReturnedCount += 1}
                     $ResultTable += $PacketTest
                 }
                 If ($ResultTable -contains $True) {$Result = $True}
                 Else {$Result = $False}
             }
             Else {$Result = $False}
-            Return $Result
+            Return $Result,$ReturnedCount
         }
+        $PingResults = Invoke-Expression -Command $MainCommand
+        $ConnectionTest = Invoke-Command -ScriptBlock $BoolScript
         If ($Quiet) {
-            $PingResults = Invoke-Expression -Command $MainCommand
-            Invoke-Command -ScriptBlock $BoolScript
+            Return $ConnectionTest[0]
         }
-        Elseif ($Latency) {
-            $PingResults = Invoke-Expression -Command $MainCommand
-            $ConnectionTest = Invoke-Command -ScriptBlock $BoolScript
+        Elseif ($Detailed) {
             $ResultObj = New-Object PsObject
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value "$ConnectionTest"
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value "$Count"
-            If ($ConnectionTest) {
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value $ConnectionTest[0]
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value $Count
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ConnectionTest[1]
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value ([Int]($ConnectionTest[1]/$Count*100))
+            If (($ConnectionTest[0]) -and ($PingResults | Select-String "Average = " -Quiet)) {
                 $Times = (($PingResults | Select-String "Average = ").ToString() -split ",").Trim()
                 $MinTime = ($Times[0] -split "=")[1].Trim() -replace "ms",""
                 $MaxTime = ($Times[1] -split "=")[1].Trim() -replace "ms",""
                 $AvgTime = ($Times[2] -split "=")[1].Trim() -replace "ms",""
             }
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Minimum" -Value $MinTime
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Maximum" -Value $MaxTime
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Average" -Value $AvgTime
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "MinTime" -Value $MinTime
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "MaxTime" -Value $MaxTime
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "AvgTime" -Value $AvgTime
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Text" -Value $PingResults
             Return $ResultObj
         }
     }
@@ -146,7 +149,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
         # Start monitoring loop
         Do {
             $ElapsedTime = (Get-Date)-$MonitorStart
-            $TestResult = Ping-BySourceIP -Source $SourceIP -Destination $TestDestination -Count $PingCount -Latency
+            $TestResult = Ping-BySourceIP -Source $SourceIP -Destination $TestDestination -Count $PingCount -Detailed
             $OverallTestCounter += 1
             If ($TestResult.Result -eq $True) {
                 $SuccessfulTestCounter += 1
@@ -179,7 +182,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             Write-Host "Successful tests: $SuccessfulTestCounter"
             Write-Host "Success rate: $SuccessRate"
             Write-Host
-            Write-Host "Please press F5 to stop monitoring"
+            Write-Host "Press F5 to stop monitoring"
             If ($TestResult.Result -eq $False) {Invoke-Command -ScriptBlock $FailureScriptBlock}
             Start-Sleep -Seconds $SleepTime
         } While (!($Host.UI.RawUI.KeyAvailable -and ($Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown,IncludeKeyUp").VirtualKeyCode -eq 116)))
