@@ -17,14 +17,14 @@ $FailureScriptBlock = {
 Function Ping-BySourceIP {
     [CmdletBinding(DefaultParameterSetName="RegularPing")]
     Param(
-        [Parameter(ParameterSetName="RegularPing",Mandatory=$True)]
-        [Parameter(ParameterSetName="QuietPing",Mandatory=$True)]
-        [Parameter(ParameterSetName="DetailedPing",Mandatory=$True)]
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$True,ValueFromPipeline=$True)]
+        [Parameter(ParameterSetName="QuietPing",Mandatory=$True,ValueFromPipeline=$True)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$True,ValueFromPipeline=$True)]
         [String]$Source,
-        [Parameter(ParameterSetName="RegularPing",Mandatory=$True)]
-        [Parameter(ParameterSetName="QuietPing",Mandatory=$True)]
-        [Parameter(ParameterSetName="DetailedPing",Mandatory=$True)]
-        [String]$Destination,
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [String]$Destination = "internetbeacon.msedge.net",
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
@@ -41,52 +41,55 @@ Function Ping-BySourceIP {
     )
     $MainCommand = "ping -n $Count -l $Size -S $Source $Destination"
     If ($Quiet -or $Detailed) {
-        $BoolScript = {
-            $ReturnedCount = 0
-            If ($PingResults.Count -gt 1) {
-                $ResultTable = @()
-                $FailureStrings = @(
-                    "Request timed out"
-                    "Destination host unreachable"
-                    "General failure"
-                    "could not find host"
-                    "not a valid address"
-                )
-                $PacketResults = (($PingResults | Select-String "bytes of data:" -Context (0,$Count)) -split "\r\n")[1..$Count]
-                Foreach ($Line in $PacketResults) {
-                    $Line = $Line.ToString()
-                    If (($Line -match "Reply from") -and (($Line -match "time=") -or ($Line -match "time<"))) {$PacketTest = $True}
-                    Else {
-                        $PacketTest = $True
-                        Foreach ($String in $FailureStrings) {
-                            If ($Line -match $String) {
-                                $PacketTest = $False
-                                Break
-                            }
+        $PingResults = Invoke-Expression -Command $MainCommand
+        $ReturnedCount = 0
+        If ($PingResults.Count -gt 1) {
+            $ResultTable = @()
+            $FailureStrings = @(
+                "Request timed out"
+                "Destination host unreachable"
+                "General failure"
+                "transmit failed"
+            )
+            $PacketResults = (($PingResults | Select-String "bytes of data:" -Context (0,$Count)) -split "\r\n")[1..$Count]
+            Foreach ($Line in $PacketResults) {
+                $Line = $Line.ToString()
+                If (($Line -match "Reply from") -and (($Line -match "time=") -or ($Line -match "time<"))) {$PacketTest = $True}
+                Else {
+                    $PacketTest = $True
+                    Foreach ($String in $FailureStrings) {
+                        If ($Line -match $String) {
+                            $PacketTest = $False
+                            Break
                         }
                     }
-                    If ($PacketTest) {$ReturnedCount += 1}
-                    $ResultTable += $PacketTest
                 }
-                If ($ResultTable -contains $True) {$Result = $True}
-                Else {$Result = $False}
+                If ($PacketTest) {$ReturnedCount += 1}
+                $ResultTable += $PacketTest
             }
+            $PercentValue = [Int]($ReturnedCount/$Count*100)
+            If ($ResultTable -contains $True) {$Result = $True}
             Else {$Result = $False}
-            Return $Result,$ReturnedCount
         }
-        $PingResults = Invoke-Expression -Command $MainCommand
-        $ConnectionTest = Invoke-Command -ScriptBlock $BoolScript
+        Else {
+            $Result = $False
+            $Count = 0
+            $PercentValue = 0
+            Remove-Variable -Name Size
+        }
         If ($Quiet) {
-            Return $ConnectionTest[0]
+            Return $Result
         }
         Elseif ($Detailed) {
             $ResultObj = New-Object PsObject
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value $ConnectionTest[0]
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value $Result
             $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value $Count
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ConnectionTest[1]
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value ([Int]($ConnectionTest[1]/$Count*100))
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ReturnedCount
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value $PercentValue
             $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $Size
-            If (($ConnectionTest[0]) -and ($PingResults | Select-String "Average = " -Quiet)) {
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Source" -Value $Source
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Destination" -Value $Destination
+            If ($Result -and ($PingResults | Select-String "Average = " -Quiet)) {
                 $Times = (($PingResults | Select-String "Average = ").ToString() -split ",").Trim()
                 $MinTime = ($Times[0] -split "=")[1].Trim() -replace "ms",""
                 $MaxTime = ($Times[1] -split "=")[1].Trim() -replace "ms",""
