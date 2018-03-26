@@ -20,14 +20,17 @@ Function Ping-BySourceIP {
         [Parameter(ParameterSetName="RegularPing",Mandatory=$True,ValueFromPipeline=$True)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$True,ValueFromPipeline=$True)]
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$True,ValueFromPipeline=$True)]
+        [ValidateNotNullOrEmpty()]
         [String]$Source,
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [ValidateNotNullOrEmpty()]
         [String]$Destination = "internetbeacon.msedge.net",
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [ValidateRange(1,4294967295)]
         [Int]$Count = 2,
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
@@ -39,8 +42,10 @@ Function Ping-BySourceIP {
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
         [Switch]$Detailed = $False
     )
-    $MainCommand = "ping -n $Count -l $Size -S $Source $Destination"
+    $MainCommand = "ping -n $Count -l $Size -S $Source -4 $Destination"
     If ($Quiet -or $Detailed) {
+        $FirstLineRegEx = "bytes of data:"
+        $LatencyRegEx = "Average = "
         $PingResults = Invoke-Expression -Command $MainCommand
         $ReturnedCount = 0
         If ($PingResults.Count -gt 1) {
@@ -51,7 +56,7 @@ Function Ping-BySourceIP {
                 "General failure"
                 "transmit failed"
             )
-            $PacketResults = (($PingResults | Select-String "bytes of data:" -Context (0,$Count)) -split "\r\n")[1..$Count]
+            $PacketResults = (($PingResults | Select-String $FirstLineRegEx -Context (0,$Count)) -split "\r\n")[1..$Count]
             Foreach ($Line in $PacketResults) {
                 $Line = $Line.ToString()
                 If (($Line -match "Reply from") -and (($Line -match "time=") -or ($Line -match "time<"))) {$PacketTest = $True}
@@ -67,13 +72,14 @@ Function Ping-BySourceIP {
                 If ($PacketTest) {$ReturnedCount += 1}
                 $ResultTable += $PacketTest
             }
+            $SentCount = $Count
             $PercentValue = [Int]($ReturnedCount/$Count*100)
             If ($ResultTable -contains $True) {$Result = $True}
             Else {$Result = $False}
         }
         Else {
             $Result = $False
-            $Count = 0
+            $SentCount = 0
             $PercentValue = 0
             Remove-Variable -Name Size
         }
@@ -81,20 +87,29 @@ Function Ping-BySourceIP {
             Return $Result
         }
         Elseif ($Detailed) {
-            $ResultObj = New-Object PsObject
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value $Result
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value $Count
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ReturnedCount
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value $PercentValue
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $Size
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Source" -Value $Source
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Destination" -Value $Destination
-            If ($Result -and ($PingResults | Select-String "Average = " -Quiet)) {
-                $Times = (($PingResults | Select-String "Average = ").ToString() -split ",").Trim()
+            If ($PingResults | Select-String $FirstLineRegEx -Quiet) {
+                $FirstLine = ($PingResults | Select-String $FirstLineRegEx).ToString() -split " from "
+                $SourceStr = ($FirstLine[1] -split " ")[0]
+                $DestStr = $FirstLine[0] -replace "Pinging ",""
+            }
+            Else {
+                $SourceStr = $Source
+                $DestStr = $Destination
+            }
+            If ($Result -and ($PingResults | Select-String $LatencyRegEx -Quiet)) {
+                $Times = (($PingResults | Select-String $LatencyRegEx).ToString() -split ",").Trim()
                 $MinTime = ($Times[0] -split "=")[1].Trim() -replace "ms",""
                 $MaxTime = ($Times[1] -split "=")[1].Trim() -replace "ms",""
                 $AvgTime = ($Times[2] -split "=")[1].Trim() -replace "ms",""
             }
+            $ResultObj = New-Object PsObject
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value $Result
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value $SentCount
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ReturnedCount
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value $PercentValue
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $Size
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Source" -Value $SourceStr
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "Destination" -Value $DestStr
             $ResultObj | Add-Member -MemberType NoteProperty -Name "MinTime" -Value $MinTime
             $ResultObj | Add-Member -MemberType NoteProperty -Name "MaxTime" -Value $MaxTime
             $ResultObj | Add-Member -MemberType NoteProperty -Name "AvgTime" -Value $AvgTime
