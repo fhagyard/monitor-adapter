@@ -20,7 +20,7 @@ Function Ping-BySourceIP {
         [Parameter(ParameterSetName="RegularPing",Mandatory=$True,ValueFromPipeline=$True)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$True,ValueFromPipeline=$True)]
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$True,ValueFromPipeline=$True)]
-        [ValidateNotNullOrEmpty()]
+        [ValidatePattern("^((\d{1,2}|1\d\d|2[0-4]\d|25[0-5])\.){3}(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])$")]
         [String]$Source,
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
@@ -37,65 +37,53 @@ Function Ping-BySourceIP {
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
         [ValidateRange(0,65500)]
         [Int]$Size = 32,
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Switch]$NoFrag = $False,
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Switch]$ResolveIP = $False,
         [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
         [Switch]$Quiet = $False,
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
         [Switch]$Detailed = $False
     )
-    $MainCommand = "ping -n $Count -l $Size -S $Source -4 $Destination"
+    $MainCommand = "ping"
+    If ($ResolveIP) {$MainCommand += " -a"}
+    $MainCommand += " -n $Count -l $Size"
+    If ($NoFrag) {$MainCommand += " -f"}
+    $MainCommand += " -S $Source -4 $Destination"
     If ($Quiet -or $Detailed) {
-        $FirstLineRegEx = "bytes of data:"
-        $LatencyRegEx = "Average = "
+        $FirstLineRegEx,$LatencyRegEx,$ReturnedCount,$LineCount = "bytes of data:","Average = ",0,0
         $PingResults = Invoke-Expression -Command $MainCommand
-        $ReturnedCount = 0
         If ($PingResults.Count -gt 1) {
             $ResultTable = @()
-            $FailureStrings = @(
-                "Request timed out"
-                "Destination host unreachable"
-                "General failure"
-                "transmit failed"
-            )
-            $PacketResults = (($PingResults | Select-String $FirstLineRegEx -Context (0,$Count)) -split "\r\n")[1..$Count]
+            $PacketResults = (($PingResults | Select-String $FirstLineRegEx -Context (0,$Count)) -split "\r\n")[1..$Count].Trim()
             Foreach ($Line in $PacketResults) {
-                $Line = $Line.ToString()
-                If (($Line -match "Reply from") -and (($Line -match "time=") -or ($Line -match "time<"))) {$PacketTest = $True}
-                Else {
-                    $PacketTest = $True
-                    Foreach ($String in $FailureStrings) {
-                        If ($Line -match $String) {
-                            $PacketTest = $False
-                            Break
-                        }
-                    }
-                }
+                $LineCount += 1
+                If ($Line -match "^Reply from .*(time=|time<)") {$PacketTest = $True}
+                Elseif ($Line -match "timed out|host unreachable|General failure|transmit failed|needs to be fragmented") {$PacketTest = $False}
+                Else {Throw "Regex failed to match on packet number $LineCount. The data was: '$Line'"}
                 If ($PacketTest) {$ReturnedCount += 1}
                 $ResultTable += $PacketTest
             }
-            $SentCount = $Count
-            $PercentValue = [Int]($ReturnedCount/$Count*100)
+            $PercentValue,$SentCount = [Int]($ReturnedCount/$Count*100),$Count
             If ($ResultTable -contains $True) {$Result = $True}
             Else {$Result = $False}
         }
         Else {
-            $Result = $False
-            $SentCount = 0
-            $PercentValue = 0
-            Remove-Variable -Name Size
+            $SentCount,$PercentValue,$Result = 0,0,$False
+            Remove-Variable -Name Size,NoFrag
         }
-        If ($Quiet) {
-            Return $Result
-        }
+        If ($Quiet) {Return $Result}
         Elseif ($Detailed) {
             If ($PingResults | Select-String $FirstLineRegEx -Quiet) {
                 $FirstLine = ($PingResults | Select-String $FirstLineRegEx).ToString() -split " from "
                 $SourceStr = ($FirstLine[1] -split " ")[0]
-                $DestStr = $FirstLine[0] -replace "Pinging ",""
+                $DestStr = $FirstLine[0] -replace "^Pinging ",""
             }
-            Else {
-                $SourceStr = $Source
-                $DestStr = $Destination
-            }
+            Else {$SourceStr,$DestStr = $Source,$Destination}
             If ($Result -and ($PingResults | Select-String $LatencyRegEx -Quiet)) {
                 $Times = (($PingResults | Select-String $LatencyRegEx).ToString() -split ",").Trim()
                 $MinTime = ($Times[0] -split "=")[1].Trim() -replace "ms",""
@@ -108,6 +96,7 @@ Function Ping-BySourceIP {
             $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ReturnedCount
             $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value $PercentValue
             $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $Size
+            $ResultObj | Add-Member -MemberType NoteProperty -Name "NoFrag" -Value $NoFrag
             $ResultObj | Add-Member -MemberType NoteProperty -Name "Source" -Value $SourceStr
             $ResultObj | Add-Member -MemberType NoteProperty -Name "Destination" -Value $DestStr
             $ResultObj | Add-Member -MemberType NoteProperty -Name "MinTime" -Value $MinTime
@@ -117,7 +106,6 @@ Function Ping-BySourceIP {
             Return $ResultObj
         }
     }
-    Else {Invoke-Expression -Command $MainCommand}
 }
 
 # Prompt to start
@@ -129,7 +117,7 @@ While ("YES","Y","NO","N" -notcontains $ConfirmStart) {
 }
 If ("NO","N" -contains $ConfirmStart) {$ConfirmRetry = "N"}
 While ("NO","N" -notcontains $ConfirmRetry) {
-    $ActiveAdapters = Get-WmiObject -Class Win32_NetworkAdapter | Where {$_.NetEnabled -eq $True}
+    $ActiveAdapters = Get-WmiObject -Class Win32_NetworkAdapter | Where {$_.NetConnectionStatus -eq 2}
     If ($ActiveAdapters) {
         # More than 1 active connection
         If ($ActiveAdapters.Count -gt 1) {
