@@ -6,11 +6,18 @@ $PingCount = 2
 # Destination to test (comment out to use default gateway)
 $DestinationHost = "internetbeacon.msedge.net"
 
+# Browser name
+$Browser = "firefox"
+
 # Scriptblock to run on dropout
 $FailureScriptBlock = {
     Write-Host
     Write-Host "Connection is down!" -ForegroundColor Red
-    Start-Process "https://duckduckgo.com" -Wait # Do something
+    Start-Process $Browser -ArgumentList "https://duckduckgo.com" # Do something
+    # Use sleep loop instead of Wait param as browser may merge process with another
+    Do {
+        Start-Sleep -Seconds 5
+    } While ((Get-Process).Name -contains $Browser)
 }
 
 # Function - Ping using specific interface
@@ -18,11 +25,12 @@ Function Ping-BySourceIP {
     [CmdletBinding(DefaultParameterSetName="RegularPing",
                     PositionalBinding=$True,
                     HelpUri="https://github.com/BoonMeister/Ping-BySourceIP")]
-    [OutputType("System.String",ParameterSetName="RegularPing")]
-    [OutputType("System.Boolean",ParameterSetName="QuietPing")]
-    [OutputType("System.Management.Automation.PSCustomObject",ParameterSetName="DetailedPing")]
+    [OutputType("System.String")]
+    [OutputType("System.Boolean")]
+    [OutputType("System.Management.Automation.PSCustomObject")]
     Param(
         [Parameter(Mandatory=$True,ValueFromPipeline=$True,Position=0)]
+        [ValidatePattern("^[0-9a-fA-F:][0-9a-fA-F:.%]+[0-9a-fA-F]$")]
         [ValidateNotNullOrEmpty()]
         [String]$Source,
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False,Position=1)]
@@ -31,6 +39,7 @@ Function Ping-BySourceIP {
         [Parameter(ParameterSetName="Regularv6Ping",Mandatory=$True,Position=1)]
         [Parameter(ParameterSetName="Quietv6Ping",Mandatory=$True,Position=1)]
         [Parameter(ParameterSetName="Detailedv6Ping",Mandatory=$True,Position=1)]
+        [ValidatePattern("^[0-9a-zA-Z:][0-9a-zA-Z:.%]+[0-9a-zA-Z]$")]
         [ValidateNotNullOrEmpty()]
         [String]$Destination = "internetbeacon.msedge.net",
         [Parameter(Mandatory=$False,Position=2)]
@@ -60,29 +69,37 @@ Function Ping-BySourceIP {
         [Switch]$Detailed = $False
     )
     Begin {
-        If ($Quiet -or $Detailed) {
-            # Effectively Start-Process with stdout redirection
-            Function Get-ProcessOutput {
-                Param(
-                    [Parameter(Mandatory=$True)]
-                    [String]$Command,
-                    [String]$ArgList,
-                    [Switch]$NoWindow = $False,
-                    [Switch]$UseShell = $False
-                )
-                $ProcInfo = New-Object System.Diagnostics.ProcessStartInfo
-                $ProcInfo.CreateNoWindow = $NoWindow
-                $ProcInfo.FileName = $Command
-                $ProcInfo.RedirectStandardError = $True
-                $ProcInfo.RedirectStandardOutput = $True
-                $ProcInfo.UseShellExecute = $UseShell
-                $ProcInfo.Arguments = $ArgList
-                $InitProc = New-Object System.Diagnostics.Process
-                $InitProc.StartInfo = $ProcInfo
-                $Null = $InitProc.Start()
-                $Output = $InitProc.StandardOutput.ReadToEnd()
-                $InitProc.WaitForExit()
+        # Effectively Start-Process with stdout redirection and better window suppression
+        Function Get-ProcessOutput {
+            Param(
+                [Parameter(Mandatory=$True)]
+                [String]$Command,
+                [String]$ArgList,
+                [Switch]$NoWindow = $False,
+                [Switch]$UseShell = $False,
+                [Switch]$WaitForOutput = $False
+            )
+            $ProcInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $ProcInfo.CreateNoWindow = $NoWindow
+            $ProcInfo.FileName = $Command
+            $ProcInfo.RedirectStandardError = $True
+            $ProcInfo.RedirectStandardOutput = $True
+            $ProcInfo.UseShellExecute = $UseShell
+            $ProcInfo.Arguments = $ArgList
+            $ProcObject = New-Object System.Diagnostics.Process
+            $ProcObject.StartInfo = $ProcInfo
+            $Null = $ProcObject.Start()
+            If ($WaitForOutput) {
+                $Output = $ProcObject.StandardOutput.ReadToEnd()
+                $ProcObject.WaitForExit()
                 $Output
+            }
+            Else {
+                Do {
+                    $ProcObject.StandardOutput.ReadLine()
+                } Until ($ProcObject.HasExited)
+                $ProcObject.StandardOutput.ReadToEnd()
+                $ProcObject.WaitForExit()
             }
         }
     }
@@ -95,7 +112,7 @@ Function Ping-BySourceIP {
         Else {$ProcArgs += " -S $Source -4 $Destination"}
         If ($Quiet -or $Detailed) {
             $FirstLineRegEx,$LatencyRegEx,$ReturnedCount,$LineCount = "bytes of data:","Average = ",0,0
-            $PingResults = (Get-ProcessOutput -Command $MainCommand -ArgList $ProcArgs -NoWindow) -split "\r\n"
+            $PingResults = (Get-ProcessOutput -Command $MainCommand -ArgList $ProcArgs -NoWindow -WaitForOutput) -split "\r\n"
             If ($PingResults.Count -gt 2) {
                 $ResultTable = @()
                 $PacketResults = (($PingResults | Select-String $FirstLineRegEx -Context (0,$Count)) -split "\r\n")[1..$Count].Trim()
@@ -146,7 +163,7 @@ Function Ping-BySourceIP {
                 $ResultObj
             }
         }
-        Elseif (($Source -ne "") -and ($Source -ne $Null)) {Start-Process $MainCommand -ArgumentList $ProcArgs -NoNewWindow -Wait}
+        Elseif (($Source -ne "") -and ($Source -ne $Null)) {Get-ProcessOutput -Command $MainCommand -ArgList $ProcArgs -NoWindow}
     }
 }
 
