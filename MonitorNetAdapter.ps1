@@ -205,8 +205,6 @@ While ("NO","N" -notcontains $ConfirmRetry) {
         $OverallTestCounter = 0
         $DropOutCounter = 0
         $SuccessfulTestCounter = 0
-        If ($DestinationHost) {$TestDestination = $DestinationHost}
-        Else {$TestDestination = $DefaultGateway}
         Write-Host
         Write-Host "Starting monitoring, one moment..."
         $MonitorStart = Get-Date
@@ -220,6 +218,8 @@ While ("NO","N" -notcontains $ConfirmRetry) {
                 If ($AdapterConfig.IPAddress.Count -gt 1) {$SourceIP = $AdapterConfig.IPAddress[0]}
                 Else {$SourceIP = $AdapterConfig.IPAddress}
                 $DefaultGateway = $AdapterConfig.DefaultIPGateway
+                If ($DestinationHost) {$TestDestination = $DestinationHost}
+                Else {$TestDestination = $DefaultGateway}
             }
             # Test
             $TestResult = Ping-BySourceIP -Source $SourceIP -Destination $TestDestination -Count $PingCount -Detailed
