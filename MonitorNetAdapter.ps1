@@ -30,7 +30,7 @@ Function Ping-BySourceIP {
     [OutputType("System.Management.Automation.PSCustomObject")]
     Param(
         [Parameter(Mandatory=$True,ValueFromPipeline=$True,Position=0)]
-        [ValidatePattern("^[0-9a-fA-F:][0-9a-fA-F:.%]+[0-9a-fA-F]$")]
+        [ValidatePattern("^[0-9a-fA-F:][0-9a-fA-F:.]+[0-9a-fA-F]$")]
         [ValidateNotNullOrEmpty()]
         [String]$Source,
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False,Position=1)]
@@ -39,7 +39,7 @@ Function Ping-BySourceIP {
         [Parameter(ParameterSetName="Regularv6Ping",Mandatory=$True,Position=1)]
         [Parameter(ParameterSetName="Quietv6Ping",Mandatory=$True,Position=1)]
         [Parameter(ParameterSetName="Detailedv6Ping",Mandatory=$True,Position=1)]
-        [ValidatePattern("^[0-9a-zA-Z:][0-9a-zA-Z:.%]+[0-9a-zA-Z]$")]
+        [ValidatePattern("^[0-9a-zA-Z:][0-9a-zA-Z:.-]+[0-9a-zA-Z]$")]
         [ValidateNotNullOrEmpty()]
         [String]$Destination = "internetbeacon.msedge.net",
         [Parameter(Mandatory=$False,Position=2)]
@@ -118,20 +118,17 @@ Function Ping-BySourceIP {
                 $PacketResults = (($PingResults | Select-String $FirstLineRegEx -Context (0,$Count)) -split "\r\n")[1..$Count].Trim()
                 Foreach ($Line in $PacketResults) {
                     $LineCount += 1
-                    If ($Line -match "^Reply from .*(time=|time<)") {$PacketTest = $True}
+                    If ($Line -match "^Reply from .+(time=|time<)") {$PacketTest = $True}
                     Elseif ($Line -match "timed out|host unreachable|General failure|transmit failed|needs to be fragmented") {$PacketTest = $False}
                     Else {Throw "Regex failed to match on packet number $LineCount. The data was: '$Line'"}
                     If ($PacketTest) {$ReturnedCount += 1}
                     $ResultTable += $PacketTest
                 }
-                $PercentValue,$SentCount = [Int]($ReturnedCount/$Count*100),$Count
+                $PercentValue,$SentCount,$SizeVar = [Int]($ReturnedCount/$Count*100),$Count,$Size
                 If ($ResultTable -contains $True) {$Result = $True}
                 Else {$Result = $False}
             }
-            Else {
-                $SentCount,$PercentValue,$Result = 0,0,$False
-                Remove-Variable -Name Size,NoFrag
-            }
+            Else {$SentCount,$PercentValue,$Result = 0,0,$False}
             If ($Quiet) {$Result}
             Elseif ($Detailed) {
                 If ($PingResults | Select-String $FirstLineRegEx -Quiet) {
@@ -152,7 +149,7 @@ Function Ping-BySourceIP {
                 $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value $SentCount
                 $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ReturnedCount
                 $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value $PercentValue
-                $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $Size
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $SizeVar
                 $ResultObj | Add-Member -MemberType NoteProperty -Name "NoFrag" -Value $NoFragVar
                 $ResultObj | Add-Member -MemberType NoteProperty -Name "Source" -Value $SourceStr
                 $ResultObj | Add-Member -MemberType NoteProperty -Name "Destination" -Value $DestStr
@@ -204,10 +201,6 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             $MacAddress = $ActiveAdapters.MACAddress
             $InterfaceName = $ActiveAdapters.Name
         }
-        $AdapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where {$_.MACAddress -eq $MacAddress}
-        If ($AdapterConfig.IPAddress.Count -gt 1) {$SourceIP = $AdapterConfig.IPAddress[0]}
-        Else {$SourceIP = $AdapterConfig.IPAddress}
-        $DefaultGateway = $AdapterConfig.DefaultIPGateway
         $LastTestOK = $True
         $OverallTestCounter = 0
         $DropOutCounter = 0
@@ -220,6 +213,15 @@ While ("NO","N" -notcontains $ConfirmRetry) {
         # Start monitoring loop
         Do {
             $ElapsedTime = (Get-Date)-$MonitorStart
+            # Update IP address & default gateway at start or after dropout
+            If (($OverallTestCounter -eq 0) -or (!$LastTestOK)) {
+                $AdapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where {$_.MACAddress -eq $MacAddress}
+                # Error handling below for no IP/DG?
+                If ($AdapterConfig.IPAddress.Count -gt 1) {$SourceIP = $AdapterConfig.IPAddress[0]}
+                Else {$SourceIP = $AdapterConfig.IPAddress}
+                $DefaultGateway = $AdapterConfig.DefaultIPGateway
+            }
+            # Test
             $TestResult = Ping-BySourceIP -Source $SourceIP -Destination $TestDestination -Count $PingCount -Detailed
             $OverallTestCounter += 1
             If ($TestResult.Result -eq $True) {
@@ -246,7 +248,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             Write-Host
             Write-Host "Last test result: " -NoNewline
             Write-Host "$LastTestText" -ForegroundColor $Colour
-            Write-Host "Last test latency avg (ms):" $TestResult.Average
+            Write-Host "Last test latency avg (ms):" $TestResult.AvgTime
             Write-Host
             Write-Host "Total dropouts detected: $DropOutCounter"
             Write-Host "Total tests: $OverallTestCounter"
