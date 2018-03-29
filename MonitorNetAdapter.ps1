@@ -10,31 +10,33 @@ $DestinationHost = "internetbeacon.msedge.net"
 $FailureScriptBlock = {
     Write-Host
     Write-Host "Connection is down!" -ForegroundColor Red
-    Start-Process notepad.exe -Wait # Do something
+    Start-Process "https://duckduckgo.com" -Wait # Do something
 }
 
 # Function - Ping using specific interface
 Function Ping-BySourceIP {
-    [CmdletBinding(DefaultParameterSetName="RegularPing")]
+    [CmdletBinding(DefaultParameterSetName="RegularPing",
+                    PositionalBinding=$True,
+                    HelpUri="https://github.com/BoonMeister/Ping-BySourceIP")]
+    [OutputType("System.String",ParameterSetName="RegularPing")]
+    [OutputType("System.Boolean",ParameterSetName="QuietPing")]
+    [OutputType("System.Management.Automation.PSCustomObject",ParameterSetName="DetailedPing")]
     Param(
-        [Parameter(ParameterSetName="RegularPing",Mandatory=$True,ValueFromPipeline=$True)]
-        [Parameter(ParameterSetName="QuietPing",Mandatory=$True,ValueFromPipeline=$True)]
-        [Parameter(ParameterSetName="DetailedPing",Mandatory=$True,ValueFromPipeline=$True)]
-        [ValidatePattern("^((\d{1,2}|1\d\d|2[0-4]\d|25[0-5])\.){3}(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])$")]
+        [Parameter(Mandatory=$True,ValueFromPipeline=$True,Position=0)]
+        [ValidateNotNullOrEmpty()]
         [String]$Source,
-        [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
-        [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
-        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="RegularPing",Mandatory=$False,Position=1)]
+        [Parameter(ParameterSetName="QuietPing",Mandatory=$False,Position=1)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False,Position=1)]
+        [Parameter(ParameterSetName="Regularv6Ping",Mandatory=$True,Position=1)]
+        [Parameter(ParameterSetName="Quietv6Ping",Mandatory=$True,Position=1)]
+        [Parameter(ParameterSetName="Detailedv6Ping",Mandatory=$True,Position=1)]
         [ValidateNotNullOrEmpty()]
         [String]$Destination = "internetbeacon.msedge.net",
-        [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
-        [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
-        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Parameter(Mandatory=$False,Position=2)]
         [ValidateRange(1,4294967295)]
         [Int]$Count = 2,
-        [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
-        [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
-        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Parameter(Mandatory=$False,Position=3)]
         [ValidateRange(0,65500)]
         [Int]$Size = 32,
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
@@ -43,68 +45,108 @@ Function Ping-BySourceIP {
         [Switch]$NoFrag = $False,
         [Parameter(ParameterSetName="RegularPing",Mandatory=$False)]
         [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="Regularv6Ping",Mandatory=$False)]
+        [Parameter(ParameterSetName="Detailedv6Ping",Mandatory=$False)]
         [Switch]$ResolveIP = $False,
-        [Parameter(ParameterSetName="QuietPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="Regularv6Ping",Mandatory=$True)]
+        [Parameter(ParameterSetName="Quietv6Ping",Mandatory=$True)]
+        [Parameter(ParameterSetName="Detailedv6Ping",Mandatory=$True)]
+        [Switch]$ForceIPv6 = $False,
+        [Parameter(ParameterSetName="QuietPing",Mandatory=$True)]
+        [Parameter(ParameterSetName="Quietv6Ping",Mandatory=$True)]
         [Switch]$Quiet = $False,
-        [Parameter(ParameterSetName="DetailedPing",Mandatory=$False)]
+        [Parameter(ParameterSetName="DetailedPing",Mandatory=$True)]
+        [Parameter(ParameterSetName="Detailedv6Ping",Mandatory=$True)]
         [Switch]$Detailed = $False
     )
-    $MainCommand = "ping"
-    If ($ResolveIP) {$MainCommand += " -a"}
-    $MainCommand += " -n $Count -l $Size"
-    If ($NoFrag) {$MainCommand += " -f"}
-    $MainCommand += " -S $Source -4 $Destination"
-    If ($Quiet -or $Detailed) {
-        $FirstLineRegEx,$LatencyRegEx,$ReturnedCount,$LineCount = "bytes of data:","Average = ",0,0
-        $PingResults = Invoke-Expression -Command $MainCommand
-        If ($PingResults.Count -gt 1) {
-            $ResultTable = @()
-            $PacketResults = (($PingResults | Select-String $FirstLineRegEx -Context (0,$Count)) -split "\r\n")[1..$Count].Trim()
-            Foreach ($Line in $PacketResults) {
-                $LineCount += 1
-                If ($Line -match "^Reply from .*(time=|time<)") {$PacketTest = $True}
-                Elseif ($Line -match "timed out|host unreachable|General failure|transmit failed|needs to be fragmented") {$PacketTest = $False}
-                Else {Throw "Regex failed to match on packet number $LineCount. The data was: '$Line'"}
-                If ($PacketTest) {$ReturnedCount += 1}
-                $ResultTable += $PacketTest
+    Begin {
+        If ($Quiet -or $Detailed) {
+            # Effectively Start-Process with stdout redirection
+            Function Get-ProcessOutput {
+                Param(
+                    [Parameter(Mandatory=$True)]
+                    [String]$Command,
+                    [String]$ArgList,
+                    [Switch]$NoWindow = $False,
+                    [Switch]$UseShell = $False
+                )
+                $ProcInfo = New-Object System.Diagnostics.ProcessStartInfo
+                $ProcInfo.CreateNoWindow = $NoWindow
+                $ProcInfo.FileName = $Command
+                $ProcInfo.RedirectStandardError = $True
+                $ProcInfo.RedirectStandardOutput = $True
+                $ProcInfo.UseShellExecute = $UseShell
+                $ProcInfo.Arguments = $ArgList
+                $InitProc = New-Object System.Diagnostics.Process
+                $InitProc.StartInfo = $ProcInfo
+                $Null = $InitProc.Start()
+                $Output = $InitProc.StandardOutput.ReadToEnd()
+                $InitProc.WaitForExit()
+                $Output
             }
-            $PercentValue,$SentCount = [Int]($ReturnedCount/$Count*100),$Count
-            If ($ResultTable -contains $True) {$Result = $True}
-            Else {$Result = $False}
         }
-        Else {
-            $SentCount,$PercentValue,$Result = 0,0,$False
-            Remove-Variable -Name Size,NoFrag
-        }
-        If ($Quiet) {Return $Result}
-        Elseif ($Detailed) {
-            If ($PingResults | Select-String $FirstLineRegEx -Quiet) {
-                $FirstLine = ($PingResults | Select-String $FirstLineRegEx).ToString() -split " from "
-                $SourceStr = ($FirstLine[1] -split " ")[0]
-                $DestStr = $FirstLine[0] -replace "^Pinging ",""
+    }
+    Process {
+        $MainCommand = "ping.exe"
+        If ($ResolveIP) {$ProcArgs = "-a -n $Count -l $Size"}
+        Else {$ProcArgs = "-n $Count -l $Size"}
+        If ($NoFrag) {$ProcArgs += " -f"}
+        If ($ForceIPv6) {$ProcArgs += " -S $Source -6 $Destination"}
+        Else {$ProcArgs += " -S $Source -4 $Destination"}
+        If ($Quiet -or $Detailed) {
+            $FirstLineRegEx,$LatencyRegEx,$ReturnedCount,$LineCount = "bytes of data:","Average = ",0,0
+            $PingResults = (Get-ProcessOutput -Command $MainCommand -ArgList $ProcArgs -NoWindow) -split "\r\n"
+            If ($PingResults.Count -gt 2) {
+                $ResultTable = @()
+                $PacketResults = (($PingResults | Select-String $FirstLineRegEx -Context (0,$Count)) -split "\r\n")[1..$Count].Trim()
+                Foreach ($Line in $PacketResults) {
+                    $LineCount += 1
+                    If ($Line -match "^Reply from .*(time=|time<)") {$PacketTest = $True}
+                    Elseif ($Line -match "timed out|host unreachable|General failure|transmit failed|needs to be fragmented") {$PacketTest = $False}
+                    Else {Throw "Regex failed to match on packet number $LineCount. The data was: '$Line'"}
+                    If ($PacketTest) {$ReturnedCount += 1}
+                    $ResultTable += $PacketTest
+                }
+                $PercentValue,$SentCount = [Int]($ReturnedCount/$Count*100),$Count
+                If ($ResultTable -contains $True) {$Result = $True}
+                Else {$Result = $False}
             }
-            Else {$SourceStr,$DestStr = $Source,$Destination}
-            If ($Result -and ($PingResults | Select-String $LatencyRegEx -Quiet)) {
-                $Times = (($PingResults | Select-String $LatencyRegEx).ToString() -split ",").Trim()
-                $MinTime = ($Times[0] -split "=")[1].Trim() -replace "ms",""
-                $MaxTime = ($Times[1] -split "=")[1].Trim() -replace "ms",""
-                $AvgTime = ($Times[2] -split "=")[1].Trim() -replace "ms",""
+            Else {
+                $SentCount,$PercentValue,$Result = 0,0,$False
+                Remove-Variable -Name Size,NoFrag
             }
-            $ResultObj = New-Object PsObject
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value $Result
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value $SentCount
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ReturnedCount
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value $PercentValue
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $Size
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "NoFrag" -Value $NoFrag
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Source" -Value $SourceStr
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Destination" -Value $DestStr
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "MinTime" -Value $MinTime
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "MaxTime" -Value $MaxTime
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "AvgTime" -Value $AvgTime
-            $ResultObj | Add-Member -MemberType NoteProperty -Name "Text" -Value $PingResults
-            Return $ResultObj
+            If ($Quiet) {$Result}
+            Elseif ($Detailed) {
+                If ($PingResults | Select-String $FirstLineRegEx -Quiet) {
+                    $FirstLine = ($PingResults | Select-String $FirstLineRegEx).ToString() -split " from "
+                    $SourceStr = ($FirstLine[1] -split " ")[0]
+                    $DestStr = $FirstLine[0] -replace "^Pinging ",""
+                }
+                Else {$SourceStr,$DestStr = $Source,$Destination}
+                If ($Result -and ($PingResults | Select-String $LatencyRegEx -Quiet)) {
+                    $Times = (($PingResults | Select-String $LatencyRegEx).ToString() -split ",").Trim()
+                    $MinTime = ($Times[0] -split "=")[1].Trim() -replace "ms",""
+                    $MaxTime = ($Times[1] -split "=")[1].Trim() -replace "ms",""
+                    $AvgTime = ($Times[2] -split "=")[1].Trim() -replace "ms",""
+                }
+                If (!$ForceIPv6) {$NoFragVar = $NoFrag}
+                $ResultObj = New-Object PsObject
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Result" -Value $Result
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Sent" -Value $SentCount
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Received" -Value $ReturnedCount
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Percent" -Value $PercentValue
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Size" -Value $Size
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "NoFrag" -Value $NoFragVar
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Source" -Value $SourceStr
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Destination" -Value $DestStr
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "MinTime" -Value $MinTime
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "MaxTime" -Value $MaxTime
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "AvgTime" -Value $AvgTime
+                $ResultObj | Add-Member -MemberType NoteProperty -Name "Text" -Value $PingResults
+                $ResultObj
+            }
         }
+        Elseif (($Source -ne "") -and ($Source -ne $Null)) {Start-Process $MainCommand -ArgumentList $ProcArgs -NoNewWindow -Wait}
     }
 }
 
