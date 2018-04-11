@@ -6,18 +6,25 @@ $PingCount = 2
 # Destination to test (comment out to use default gateway)
 $DestinationHost = "internetbeacon.msedge.net"
 
-# Browser name
-$Browser = "firefox"
-
 # Scriptblock to run on dropout
-$FailureScriptBlock = {
+$1stScriptBlock = {
     Write-Host
-    Write-Host "Connection is down!" -ForegroundColor Red
-    Start-Process $Browser -ArgumentList "https://duckduckgo.com" # Do something
-    # Use sleep loop instead of Wait param as browser may merge process with another
-    Do {
-        Start-Sleep -Seconds 5
-    } While ((Get-Process).Name -contains $Browser)
+    Write-Host "ScriptBlock 1 triggered" -ForegroundColor Red
+    Start-Process notepad -Wait
+}
+
+# Scriptblock to run on 2nd consecutive failed test (i.e. after 1st)
+$2ndScriptBlock = {
+    Write-Host
+    Write-Host "ScriptBlock 2 triggered" -ForegroundColor Red
+    Start-Process notepad -Wait
+}
+
+# Scriptblock to run on 3nd consecutive failed test (i.e. after 2nd)
+$3rdScriptBlock = {
+    Write-Host
+    Write-Host "ScriptBlock 3 triggered" -ForegroundColor Red
+    Start-Process notepad -Wait
 }
 
 # Function - Ping using specific interface
@@ -202,6 +209,8 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             $InterfaceName = $ActiveAdapters.Name
         }
         $LastTestOK = $True
+        $1stSBTriggered = $False
+        $2ndSBTriggered = $False
         $OverallTestCounter = 0
         $DropOutCounter = 0
         $SuccessfulTestCounter = 0
@@ -214,10 +223,12 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             # Update IP address & default gateway at start or after dropout
             If (($OverallTestCounter -eq 0) -or (!$LastTestOK)) {
                 $AdapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where {$_.MACAddress -eq $MacAddress}
-                # Error handling below for no IP/DG?
-                If ($AdapterConfig.IPAddress.Count -gt 1) {$SourceIP = $AdapterConfig.IPAddress[0]}
-                Else {$SourceIP = $AdapterConfig.IPAddress}
-                $DefaultGateway = $AdapterConfig.DefaultIPGateway
+                Try {
+                    If ($AdapterConfig.IPAddress.Count -gt 1) {[String]$SourceIP = $AdapterConfig.IPAddress}
+                    Else {[String]$SourceIP = $AdapterConfig.IPAddress}
+                    $DefaultGateway = $AdapterConfig.DefaultIPGateway
+                }
+                Catch {Throw "Could not retrieve the IP address or default gateway for the interface:`n$InterfaceName"}
                 If ($DestinationHost) {$TestDestination = $DestinationHost}
                 Else {$TestDestination = $DefaultGateway}
             }
@@ -229,6 +240,9 @@ While ("NO","N" -notcontains $ConfirmRetry) {
                 $LastTestOK = $True
                 $LastTestText = "OK"
                 $Colour = "Green"
+                # Reset scriptblock flags
+                $1stSBTriggered = $False
+                $2ndSBTriggered = $False
             }
             Else {
                 If ($LastTestOK) {$DropOutCounter += 1}
@@ -256,7 +270,20 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             Write-Host "Success rate: $SuccessRate"
             Write-Host
             Write-Host "Press F5 to stop monitoring"
-            If ($TestResult.Result -eq $False) {Invoke-Command -ScriptBlock $FailureScriptBlock}
+            If (($TestResult.Result -eq $False) -and ($2ndSBTriggered)) {
+                # Reset scriptblock flags
+                $2ndSBTriggered = $False
+                $1stSBTriggered = $False
+                Invoke-Command -ScriptBlock $3rdScriptBlock
+            }
+            Elseif (($TestResult.Result -eq $False) -and ($1stSBTriggered)) {
+                $2ndSBTriggered = $True
+                Invoke-Command -ScriptBlock $2ndScriptBlock
+            }
+            Elseif ($TestResult.Result -eq $False) {
+                $1stSBTriggered = $True
+                Invoke-Command -ScriptBlock $1stScriptBlock
+            }
             Start-Sleep -Seconds $SleepTime
         } While (!($Host.UI.RawUI.KeyAvailable -and ($Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown,IncludeKeyUp").VirtualKeyCode -eq 116)))
         $MonitorEnd = Get-Date
