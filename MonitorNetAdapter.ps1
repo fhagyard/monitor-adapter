@@ -1,7 +1,9 @@
 # Sleep time between each connection test (seconds)
-$SleepTime = 1
+$SleepTime = 10
 # Number of echo requests to send per test
 $PingCount = 2
+# Main loop sleep/screen refresh (seconds)
+$MainLoopSleep = 1
 
 # Destination to test (comment out to use default gateway)
 $DestinationHost = "internetbeacon.msedge.net"
@@ -202,11 +204,15 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             $Index = $UserChoice - 1
             $MacAddress = $ActiveAdapters[$Index].MACAddress
             $InterfaceName = $ActiveAdapters[$Index].Name
+            $InterfaceIndex = $ActiveAdapters[$Index].InterfaceIndex
+            $InterfaceGUID = $ActiveAdapters[$Index].GUID
         }
         # Only 1 active connection
         Else {
             $MacAddress = $ActiveAdapters.MACAddress
             $InterfaceName = $ActiveAdapters.Name
+            $InterfaceIndex = $ActiveAdapters.InterfaceIndex
+            $InterfaceGUID = $ActiveAdapters.GUID
         }
         $LastTestOK = $True
         $1stSBTriggered = $False
@@ -217,9 +223,9 @@ While ("NO","N" -notcontains $ConfirmRetry) {
         Write-Host
         Write-Host "Starting monitoring, one moment..."
         $MonitorStart = Get-Date
+        $LastTestTime = Get-Date
         # Start monitoring loop
         Do {
-            $ElapsedTime = (Get-Date)-$MonitorStart
             # Update IP address & default gateway at start or after dropout
             If (($OverallTestCounter -eq 0) -or (!$LastTestOK)) {
                 $AdapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where {$_.MACAddress -eq $MacAddress}
@@ -232,25 +238,33 @@ While ("NO","N" -notcontains $ConfirmRetry) {
                 If ($DestinationHost) {$TestDestination = $DestinationHost}
                 Else {$TestDestination = $DefaultGateway}
             }
-            # Test
-            $TestResult = Ping-BySourceIP -Source $SourceIP -Destination $TestDestination -Count $PingCount -Detailed
-            $OverallTestCounter += 1
-            If ($TestResult.Result -eq $True) {
-                $SuccessfulTestCounter += 1
-                $LastTestOK = $True
-                $LastTestText = "OK"
-                $Colour = "Green"
-                # Reset scriptblock flags
-                $1stSBTriggered = $False
-                $2ndSBTriggered = $False
+            $CurrentTime = Get-Date
+            $ElapsedTime = $CurrentTime-$MonitorStart
+            # Test at start, on failure or after waiting for $SleepTime to pass
+            If ((($CurrentTime-$LastTestTime).Seconds -gt $SleepTime) -or !$LastTestOK -or ($OverallTestCounter -eq 0)) {
+                $TestResult = Ping-BySourceIP -Source $SourceIP -Destination $TestDestination -Count $PingCount -Detailed
+                $OverallTestCounter += 1
+                If ($TestResult.Result -eq $True) {
+                    $SuccessfulTestCounter += 1
+                    $LastTestOK = $True
+                    $LastTestText = "OK"
+                    $Colour = "Green"
+                    $LatencyText = $TestResult.AvgTime
+                    # Reset scriptblock flags
+                    $1stSBTriggered = $False
+                    $2ndSBTriggered = $False
+                }
+                Else {
+                    If ($LastTestOK) {$DropOutCounter += 1}
+                    $LastTestOK = $False
+                    $LastTestText = "FAILED"
+                    $Colour = "Red"
+                    $LatencyText = "N/A"
+                }
+                $SuccessRate = ($SuccessfulTestCounter/$OverallTestCounter*100).ToString("0.0") + "%"
+                $LastTestTime = Get-Date
             }
-            Else {
-                If ($LastTestOK) {$DropOutCounter += 1}
-                $LastTestOK = $False
-                $LastTestText = "FAILED"
-                $Colour = "Red"
-            }
-            $SuccessRate = ($SuccessfulTestCounter/$OverallTestCounter*100).ToString("0.0") + "%"
+            $NextTestSecs = (($LastTestTime.AddSeconds($SleepTime))-$CurrentTime).Seconds
             Clear-Host
             Write-Host "Start:" $MonitorStart
             Write-Host "Time elapsed (D:H:M:S): " $ElapsedTime.Days ":" $ElapsedTime.Hours ":" $ElapsedTime.Minutes ":" $ElapsedTime.Seconds -Separator ""
@@ -262,7 +276,8 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             Write-Host
             Write-Host "Last test result: " -NoNewline
             Write-Host "$LastTestText" -ForegroundColor $Colour
-            Write-Host "Last test latency avg (ms):" $TestResult.AvgTime
+            Write-Host "Last test latency avg (ms): $LatencyText"
+            Write-Host "Next test (s): $NextTestSecs"
             Write-Host
             Write-Host "Total dropouts detected: $DropOutCounter"
             Write-Host "Total tests: $OverallTestCounter"
@@ -284,7 +299,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
                 $1stSBTriggered = $True
                 Invoke-Command -ScriptBlock $1stScriptBlock
             }
-            Start-Sleep -Seconds $SleepTime
+            Start-Sleep -Seconds $MainLoopSleep
         } While (!($Host.UI.RawUI.KeyAvailable -and ($Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown,IncludeKeyUp").VirtualKeyCode -eq 116)))
         $MonitorEnd = Get-Date
         $TotalTime = $MonitorEnd-$MonitorStart
