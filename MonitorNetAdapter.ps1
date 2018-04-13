@@ -230,7 +230,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             If (($OverallTestCounter -eq 0) -or (!$LastTestOK)) {
                 $AdapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where {$_.MACAddress -eq $MacAddress}
                 Try {
-                    If ($AdapterConfig.IPAddress.Count -gt 1) {[String]$SourceIP = $AdapterConfig.IPAddress}
+                    If ($AdapterConfig.IPAddress.Count -gt 1) {[String]$SourceIP = $AdapterConfig[0].IPAddress}
                     Else {[String]$SourceIP = $AdapterConfig.IPAddress}
                     $DefaultGateway = $AdapterConfig.DefaultIPGateway
                 }
