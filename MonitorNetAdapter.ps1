@@ -8,24 +8,47 @@ $MainLoopSleep = 1
 # Destination to test (comment out to use default gateway)
 $DestinationHost = "internetbeacon.msedge.net"
 
-# Scriptblock to run on dropout
+# Failure ScriptBlocks:
+
+# Scriptblock to run on dropout (1st failed test)
 $1stScriptBlock = {
     Write-Host
     Write-Host "ScriptBlock 1 triggered" -ForegroundColor Red
     Start-Process notepad -Wait
 }
 
-# Scriptblock to run on 2nd consecutive failed test (i.e. after 1st)
+# 2nd consecutive failed test
 $2ndScriptBlock = {
     Write-Host
     Write-Host "ScriptBlock 2 triggered" -ForegroundColor Red
     Start-Process notepad -Wait
 }
 
-# Scriptblock to run on 3nd consecutive failed test (i.e. after 2nd)
+# 3rd consecutive failed test
 $3rdScriptBlock = {
     Write-Host
     Write-Host "ScriptBlock 3 triggered" -ForegroundColor Red
+    Start-Process notepad -Wait
+}
+
+# 4th consecutive failed test
+$4thScriptBlock = {
+    Write-Host
+    Write-Host "ScriptBlock 4 triggered" -ForegroundColor Red
+    Start-Process notepad -Wait
+}
+
+# 5th consecutive failed test
+$5thScriptBlock = {
+    Write-Host
+    Write-Host "ScriptBlock 5 triggered" -ForegroundColor Red
+    Start-Process notepad -Wait
+}
+
+# 6th consecutive failed test
+$6thScriptBlock = {
+    Write-Host
+    Write-Host "ScriptBlock 6 triggered" -ForegroundColor Red
     Start-Process notepad -Wait
 }
 
@@ -78,7 +101,7 @@ Function Ping-BySourceIP {
         [Switch]$Detailed = $False
     )
     Begin {
-        # Effectively Start-Process with stdout redirection and better window suppression
+        # Effectively Start-Process with better stdout redirection and window suppression
         Function Get-ProcessOutput {
             Param(
                 [Parameter(Mandatory=$True)]
@@ -215,8 +238,7 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             $InterfaceGUID = $ActiveAdapters.GUID
         }
         $LastTestOK = $True
-        $1stSBTriggered = $False
-        $2ndSBTriggered = $False
+        $LastScriptBlock = "6"
         $OverallTestCounter = 0
         $DropOutCounter = 0
         $SuccessfulTestCounter = 0
@@ -250,9 +272,8 @@ While ("NO","N" -notcontains $ConfirmRetry) {
                     $LastTestText = "OK"
                     $Colour = "Green"
                     $LatencyText = $TestResult.AvgTime
-                    # Reset scriptblock flags
-                    $1stSBTriggered = $False
-                    $2ndSBTriggered = $False
+                    # Reset scriptblocks
+                    $LastScriptBlock = "6"
                 }
                 Else {
                     If ($LastTestOK) {$DropOutCounter += 1}
@@ -285,19 +306,40 @@ While ("NO","N" -notcontains $ConfirmRetry) {
             Write-Host "Success rate: $SuccessRate"
             Write-Host
             Write-Host "Press F5 to stop monitoring"
-            If (($TestResult.Result -eq $False) -and ($2ndSBTriggered)) {
-                # Reset scriptblock flags
-                $2ndSBTriggered = $False
-                $1stSBTriggered = $False
-                Invoke-Command -ScriptBlock $3rdScriptBlock
-            }
-            Elseif (($TestResult.Result -eq $False) -and ($1stSBTriggered)) {
-                $2ndSBTriggered = $True
-                Invoke-Command -ScriptBlock $2ndScriptBlock
-            }
-            Elseif ($TestResult.Result -eq $False) {
-                $1stSBTriggered = $True
-                Invoke-Command -ScriptBlock $1stScriptBlock
+            If ($TestResult.Result -eq $False) {
+                Switch ($LastScriptBlock) {
+                    "6" {
+                        $LastScriptBlock = "1"
+                        $RunScriptBlock = $1stScriptBlock
+                        Break
+                    }
+                    "1" {
+                        $LastScriptBlock = "2"
+                        $RunScriptBlock = $2ndScriptBlock
+                        Break
+                    }
+                    "2" {
+                        $LastScriptBlock = "3"
+                        $RunScriptBlock = $3rdScriptBlock
+                        Break
+                    }
+                    "3" {
+                        $LastScriptBlock = "4"
+                        $RunScriptBlock = $4thScriptBlock
+                        Break
+                    }
+                    "4" {
+                        $LastScriptBlock = "5"
+                        $RunScriptBlock = $5thScriptBlock
+                        Break
+                    }
+                    "5" {
+                        $LastScriptBlock = "6"
+                        $RunScriptBlock = $6thScriptBlock
+                        Break
+                    }
+                }
+                Invoke-Command -ScriptBlock $RunScriptBlock
             }
             Start-Sleep -Seconds $MainLoopSleep
         } While (!($Host.UI.RawUI.KeyAvailable -and ($Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown,IncludeKeyUp").VirtualKeyCode -eq 116)))
